@@ -1,12 +1,15 @@
-"""Mock clarify_node — 파트 A가 실제 구현으로 교체."""
-from app.state import AgentState
-
-TEMPLATES = {
-    "traffic": "사고 일자, 피해 정도(대물/인적), 가입 보험, 과실 인정 여부를 알려주세요.",
-    "unknown": "교통사고·음주운전·뺑소니 등 교통 관련 사건만 상담 가능합니다. 사건 유형을 구체적으로 알려주세요.",
-}
+"""clarify_node — 분류 신뢰도 낮을 때 명확화 질문 반환 (MVP: 정적 메시지)."""
+from app.constants import DISCLAIMER
+from app.state import LegalState
 
 
-async def clarify_node(state: AgentState) -> dict:
-    domain = state.get("domain", "unknown")
-    return {"clarify_question": TEMPLATES.get(domain, TEMPLATES["unknown"])}
+async def clarify_node(state: LegalState) -> dict:
+    msg = (
+        "어떤 교통 사건인지 좀 더 구체적으로 알려주실 수 있나요? "
+        "(예: 뺑소니, 음주운전, 보행자 사고 등)"
+    )
+    return {
+        "clarification_question": msg,
+        "answer_text": msg + "\n\n" + DISCLAIMER,
+        "citations": [],
+    }

@@ -1,39 +1,69 @@
-"""Mock classify_node — 파트 A가 실제 구현으로 교체.
+"""classify_node — 사용자 질문을 case_type 으로 분류.
 
-스코프: 교통 관련 사건만. 비교통 질문은 unknown → fallback.
-case_type 매핑은 키워드 우선순위 기반(앞 규칙이 우선). 본구현 시 Gemini Flash JSON 출력으로 대체.
+Solar mini + JSON 모드 + few-shot. 실패 시 키워드 폴백.
 """
-from app.state import AgentState
+import json
+import logging
+
+from app.llm.solar_client import SolarAPIError, call_flash_json
+from app.state import LegalState
+from app.utils.keyword_fallback import ClassificationOutput, classify_by_keyword
+from app.utils.prompt_loader import load_prompt
+
+logger = logging.getLogger(__name__)
+
+_FEW_SHOT_HEADER = "다음은 분류 예시입니다:\n\n"
 
 
-KEYWORD_RULES: list[tuple[str, list[str], bool]] = [
-    # (case_type, keywords, needs_settlement)
-    ("dui", ["음주운전", "음주", "혈중알코올", "면허취소", "면허정지"], False),
-    ("hit_and_run", ["뺑소니", "도주", "사고 후 도주", "특가법"], True),
-    ("unlicensed", ["무면허"], False),
-    ("accident_injury", ["사망", "중상", "전치", "인사사고", "사람 다침", "인명"], True),
-    ("accident_settlement", ["교통사고", "접촉사고", "추돌", "물피", "차사고", "보험", "합의금", "과실비율", "과실"], True),
-    ("traffic_violation", ["과속", "신호위반", "범칙금", "벌점", "딱지"], False),
-]
+def _build_few_shot_block(examples_json: str) -> str:
+    examples = json.loads(examples_json)
+    lines = []
+    for ex in examples:
+        lines.append(f"질문: {ex['input']}")
+        exp = ex["expected"]
+        lines.append(
+            f"→ case_type={exp['case_type']}, needs_settlement={str(exp['needs_settlement']).lower()}, confidence={exp['confidence']}"
+        )
+        lines.append("")
+    return _FEW_SHOT_HEADER + "\n".join(lines)
 
 
-async def classify_node(state: AgentState) -> dict:
-    q = state.get("user_query", "")
+def _build_user_prompt(state: LegalState, few_shot_block: str) -> str:
+    history = state.get("history", [])
+    recent = history[-4:] if len(history) > 4 else history
+    history_text = ""
+    if recent:
+        history_text = "\n이전 대화:\n" + "\n".join(
+            f"[{m['role']}] {m['content']}" for m in recent
+        )
 
-    for case_type, keywords, needs_settlement in KEYWORD_RULES:
-        if any(k in q for k in keywords):
-            return {
-                "domain": "traffic",
-                "case_type": case_type,
-                "needs_settlement": needs_settlement,
-                "needs_clarify": False,
-                "classification_confidence": 0.85,
-            }
+    return f"{few_shot_block}\n현재 질문을 분류하세요:{history_text}\n\n질문: {state['user_query']}"
+
+
+async def classify_node(state: LegalState) -> dict:
+    """반환: {domain, case_type, needs_settlement, classification_confidence}."""
+    system_prompt = load_prompt("classify_system.txt")
+    examples_json = load_prompt("classify_examples.json")
+    few_shot_block = _build_few_shot_block(examples_json)
+    user_prompt = _build_user_prompt(state, few_shot_block)
+
+    try:
+        result: ClassificationOutput = await call_flash_json(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            schema=ClassificationOutput,
+        )
+    except SolarAPIError as exc:
+        logger.warning("Solar API 실패, 키워드 폴백 사용: %s", exc)
+        result = classify_by_keyword(state["user_query"])
+
+    needs_settlement = result.needs_settlement
+    if result.case_type in ("OUT_OF_SCOPE", "RECKLESS_DRIVING"):
+        needs_settlement = False
 
     return {
-        "domain": "unknown",
-        "case_type": None,
-        "needs_settlement": False,
-        "needs_clarify": True,
-        "classification_confidence": 0.3,
+        "domain": "교통",
+        "case_type": result.case_type,
+        "needs_settlement": needs_settlement,
+        "classification_confidence": result.confidence,
     }

@@ -1,46 +1,49 @@
 """LangGraph StateGraph 골격.
 
 흐름:
-  classify → (clarify | retrieve)
-  retrieve → guide → settlement → generate → post_check → END
-  검색 0건 / 분류 실패 시 fallback.
+  classify ─┬─ case_type == "OUT_OF_SCOPE"           → fallback_no_domain → fallback → END
+            ├─ classification_confidence < THRESHOLD → clarify → END
+            └─ retrieve ─┬─ docs == []               → fallback_no_docs → fallback → END
+                         └─ guide → settlement → generate → post_check → END
 """
-from langgraph.graph import StateGraph, END
-from app.state import AgentState
+from langgraph.graph import END, StateGraph
+
 from app.agents.classify import classify_node
 from app.agents.clarify import clarify_node
-from app.agents.retrieve import retrieve_node
-from app.agents.guide import guide_node
-from app.agents.settlement import settlement_node
-from app.agents.generate import generate_node
-from app.agents.post_check import post_check_node
 from app.agents.fallback import fallback_node
+from app.agents.generate import generate_node
+from app.agents.guide import guide_node
+from app.agents.post_check import post_check_node
+from app.agents.retrieve import retrieve_node
+from app.agents.settlement import settlement_node
+from app.constants import CLARIFY_THRESHOLD
+from app.state import LegalState
 
 
-def _route_after_classify(state: AgentState) -> str:
-    if state.get("domain") == "unknown":
+def _route_after_classify(state: LegalState) -> str:
+    if state.get("case_type") == "OUT_OF_SCOPE":
         return "fallback_no_domain"
-    if state.get("needs_clarify"):
+    if float(state.get("classification_confidence", 1.0)) < CLARIFY_THRESHOLD:
         return "clarify"
     return "retrieve"
 
 
-def _route_after_retrieve(state: AgentState) -> str:
+def _route_after_retrieve(state: LegalState) -> str:
     if not state.get("retrieved_docs"):
         return "fallback_no_docs"
     return "guide"
 
 
-async def _set_fallback_no_domain(state: AgentState) -> dict:
+async def _set_fallback_no_domain(state: LegalState) -> dict:
     return {"fallback_reason": "no_domain"}
 
 
-async def _set_fallback_no_docs(state: AgentState) -> dict:
+async def _set_fallback_no_docs(state: LegalState) -> dict:
     return {"fallback_reason": "no_docs"}
 
 
 def build_graph():
-    g = StateGraph(AgentState)
+    g = StateGraph(LegalState)
 
     g.add_node("classify", classify_node)
     g.add_node("clarify", clarify_node)
