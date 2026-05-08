@@ -26,6 +26,9 @@ pip install -r requirements.txt
 copy .env.example .env
 # .env 의 UPSTAGE_API_KEY 설정 (https://console.upstage.ai/api-keys)
 
+# 벡터 스토어 구축 (법령 및 판례 데이터 임베딩)
+python build_vector_store.py
+
 uvicorn app.api.main:app --reload --port 8000
 ```
 
