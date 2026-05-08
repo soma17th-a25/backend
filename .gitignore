@@ -18,3 +18,4 @@ data/raw/
 .DS_Store
 outputs/
 eval_results.csv
+dbvector/
